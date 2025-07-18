@@ -1,205 +1,17 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel
-from typing import List, Optional
-from passlib.context import CryptContext
-import jwt
-import uvicorn
-import os
-from datetime import datetime, timedelta
+import streamlit as st
+from datetime import datetime
 from uuid import uuid4
 import shutil
-
-# Secret key for JWT
-SECRET_KEY = "your_secret_key"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-app = FastAPI()
-
-# CORS middleware to allow frontend access
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# In-memory "database" for demo purposes
-users_db = {
-    "doctor": {
-        "username": "doctor",
-        "hashed_password": pwd_context.hash("password123"),
-    }
-}
-
-patients_db = {}
-analyses_db = {}
-notifications_db = {}
-
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-# Pydantic models
-class User(BaseModel):
-    username: str
-
-class Patient(BaseModel):
-    patient_id: str
-    scan_date: datetime
-    eye: str
-
-class AnalysisResult(BaseModel):
-    patient_id: str
-    diagnosis: str
-    confidence: float
-    details: Optional[str] = None
-
-class Notification(BaseModel):
-    id: str
-    message: str
-    timestamp: datetime
-
-# Utility functions
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def authenticate_user(username: str, password: str):
-    user = users_db.get(username)
-    if not user:
-        return False
-    if not verify_password(password, user["hashed_password"]):
-        return False
-    return User(username=username)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    credentials_exception = HTTPException(
-        status_code=401,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
-    user = users_db.get(username)
-    if user is None:
-        raise credentials_exception
-    return User(username=username)
-
-# Routes
-@app.post("/token")
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=400, detail="Incorrect username or password")
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.post("/patients/", response_model=Patient)
-async def create_patient(patient_id: str = Form(...), scan_date: str = Form(...), eye: str = Form(...), current_user: User = Depends(get_current_user)):
-    if patient_id in patients_db:
-        raise HTTPException(status_code=400, detail="Patient already exists")
-    try:
-        scan_date_dt = datetime.fromisoformat(scan_date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid scan_date format")
-    patient = Patient(patient_id=patient_id, scan_date=scan_date_dt, eye=eye)
-    patients_db[patient_id] = patient
-    return patient
-
-@app.get("/patients/{patient_id}", response_model=Patient)
-async def get_patient(patient_id: str, current_user: User = Depends(get_current_user)):
-    patient = patients_db.get(patient_id)
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    return patient
-
-@app.post("/upload/")
-async def upload_files(patient_id: str = Form(...), files: List[UploadFile] = File(...), current_user: User = Depends(get_current_user)):
-    if patient_id not in patients_db:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    saved_files = []
-    patient_folder = os.path.join(UPLOAD_DIR, patient_id)
-    os.makedirs(patient_folder, exist_ok=True)
-    for file in files:
-        filename = f"{uuid4().hex}_{file.filename}"
-        file_path = os.path.join(patient_folder, filename)
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        saved_files.append(filename)
-    return {"filenames": saved_files}
-
-@app.post("/analysis/", response_model=AnalysisResult)
-async def submit_analysis(patient_id: str = Form(...), diagnosis: str = Form(...), confidence: float = Form(...), details: Optional[str] = Form(None), current_user: User = Depends(get_current_user)):
-    if patient_id not in patients_db:
-        raise HTTPException(status_code=404, detail="Patient not found")
-    analysis = AnalysisResult(patient_id=patient_id, diagnosis=diagnosis, confidence=confidence, details=details)
-    analyses_db[patient_id] = analysis
-    return analysis
-
-@app.get("/analysis/{patient_id}", response_model=AnalysisResult)
-async def get_analysis(patient_id: str, current_user: User = Depends(get_current_user)):
-    analysis = analyses_db.get(patient_id)
-    if not analysis:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    return analysis
-
-@app.get("/history/", response_model=List[Patient])
-async def search_history(patient_id: Optional[str] = None, diagnosis: Optional[str] = None, current_user: User = Depends(get_current_user)):
-    results = []
-    for pid, patient in patients_db.items():
-        if patient_id and patient_id.lower() not in pid.lower():
-            continue
-        if diagnosis:
-            analysis = analyses_db.get(pid)
-            if not analysis or diagnosis.lower() not in analysis.diagnosis.lower():
-                continue
-        results.append(patient)
-    return results
-
-@app.get("/notifications/", response_model=List[Notification])
-async def get_notifications(current_user: User = Depends(get_current_user)):
-    return list(notifications_db.values())
-
-@app.post("/notifications/")
-async def create_notification(message: str = Form(...), current_user: User = Depends(get_current_user)):
-    notif_id = uuid4().hex
-    notification = Notification(id=notif_id, message=message, timestamp=datetime.utcnow())
-    notifications_db[notif_id] = notification
-    return notification
-
-@app.get("/reports/{patient_id}")
-async def download_report(patient_id: str, current_user: User = Depends(get_current_user)):
-    # For demo, generate a simple PDF report on the fly
-    from fastapi.responses import StreamingResponse
-    from io import BytesIO
-    from reportlab.pdfgen import canvas
-
-    if patient_id not in patients_db:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
+import os
+from io import BytesIO
+from reportlab.pdfgen import canvas
+from passlib.context import CryptContext
+from dataclasses import dataclass, asdict, field
+from typing import Optional, List
+def generate_report_pdf(patient_id: str, analysis: Optional[AnalysisResult]) -> BytesIO:
     buffer = BytesIO()
     p = canvas.Canvas(buffer)
     p.drawString(100, 750, f"RetinaView AI Report for Patient {patient_id}")
-    analysis = analyses_db.get(patient_id)
     if analysis:
         p.drawString(100, 720, f"Diagnosis: {analysis.diagnosis}")
         p.drawString(100, 700, f"Confidence: {analysis.confidence}%")
@@ -210,8 +22,162 @@ async def download_report(patient_id: str, current_user: User = Depends(get_curr
     p.showPage()
     p.save()
     buffer.seek(0)
-    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=report_{patient_id}.pdf"})
+    return buffer
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Streamlit app
+st.title("RetinaView AI")
+
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+def login():
+    st.subheader("Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user = authenticate_user(username, password)
+        if user:
+            st.session_state.user = user
+            st.success(f"Logged in as {username}")
+        else:
+            st.error("Invalid username or password")
+
+def logout():
+    st.session_state.user = None
+    st.success("Logged out")
+
+if st.session_state.user is None:
+    login()
+else:
+    st.sidebar.write(f"Logged in as: {st.session_state.user.username}")
+    if st.sidebar.button("Logout"):
+        logout()
+
+    menu = st.sidebar.selectbox("Menu", [
+        "Create Patient",
+        "View Patient",
+        "Upload Files",
+        "Submit Analysis",
+        "View Analysis",
+        "Search History",
+        "Notifications",
+        "Download Report"
+    ])
+
+    if menu == "Create Patient":
+        st.header("Create Patient")
+        with st.form("create_patient_form"):
+            patient_id = st.text_input("Patient ID")
+            scan_date = st.date_input("Scan Date")
+            eye = st.selectbox("Eye", ["left", "right"])
+            submitted = st.form_submit_button("Create")
+            if submitted:
+                if patient_id in patients_db:
+                    st.error("Patient already exists")
+                else:
+                    patient = Patient(patient_id=patient_id, scan_date=datetime.combine(scan_date, datetime.min.time()), eye=eye)
+                    patients_db[patient_id] = patient
+                    st.success(f"Patient {patient_id} created")
+
+    elif menu == "View Patient":
+        st.header("View Patient")
+        patient_id = st.text_input("Enter Patient ID")
+        if st.button("Get Patient"):
+            patient = patients_db.get(patient_id)
+            if patient:
+                st.json(asdict(patient))
+            else:
+                st.error("Patient not found")
+
+    elif menu == "Upload Files":
+        st.header("Upload Files")
+        patient_id = st.text_input("Patient ID for Upload")
+        uploaded_files = st.file_uploader("Choose files", accept_multiple_files=True)
+        if st.button("Upload"):
+            if patient_id not in patients_db:
+                st.error("Patient not found")
+            elif not uploaded_files:
+                st.error("No files selected")
+            else:
+                patient_folder = os.path.join(UPLOAD_DIR, patient_id)
+                os.makedirs(patient_folder, exist_ok=True)
+                saved_files = []
+                for file in uploaded_files:
+                    filename = f"{uuid4().hex}_{file.name}"
+                    file_path = os.path.join(patient_folder, filename)
+                    with open(file_path, "wb") as f:
+                        f.write(file.getbuffer())
+                    saved_files.append(filename)
+                st.success(f"Uploaded files: {saved_files}")
+
+    elif menu == "Submit Analysis":
+        st.header("Submit Analysis")
+        with st.form("submit_analysis_form"):
+            patient_id = st.text_input("Patient ID")
+            diagnosis = st.text_input("Diagnosis")
+            confidence = st.number_input("Confidence", min_value=0.0, max_value=100.0, step=0.1)
+            details = st.text_area("Details (optional)")
+            submitted = st.form_submit_button("Submit")
+            if submitted:
+                if patient_id not in patients_db:
+                    st.error("Patient not found")
+                else:
+                    analysis = AnalysisResult(patient_id=patient_id, diagnosis=diagnosis, confidence=confidence, details=details)
+                    analyses_db[patient_id] = analysis
+                    st.success(f"Analysis for patient {patient_id} submitted")
+
+    elif menu == "View Analysis":
+        st.header("View Analysis")
+        patient_id = st.text_input("Enter Patient ID")
+        if st.button("Get Analysis"):
+            analysis = analyses_db.get(patient_id)
+            if analysis:
+                st.json(asdict(analysis))
+            else:
+                st.error("Analysis not found")
+
+    elif menu == "Search History":
+        st.header("Search History")
+        patient_id_query = st.text_input("Patient ID contains (optional)")
+        diagnosis_query = st.text_input("Diagnosis contains (optional)")
+        if st.button("Search"):
+            results = []
+            for pid, patient in patients_db.items():
+                if patient_id_query and patient_id_query.lower() not in pid.lower():
+                    continue
+                if diagnosis_query:
+                    analysis = analyses_db.get(pid)
+                    if not analysis or diagnosis_query.lower() not in analysis.diagnosis.lower():
+                        continue
+                results.append(asdict(patient))
+            st.json(results)
+
+    elif menu == "Notifications":
+        st.header("Notifications")
+        if st.button("Refresh"):
+            notifs = [asdict(notif) for notif in notifications_db.values()]
+            st.json(notifs)
+        with st.form("create_notification_form"):
+            message = st.text_input("New Notification Message")
+            submitted = st.form_submit_button("Create Notification")
+            if submitted:
+                notif_id = uuid4().hex
+                notification = Notification(id=notif_id, message=message, timestamp=datetime.utcnow())
+                notifications_db[notif_id] = notification
+                st.success("Notification created")
+
+    elif menu == "Download Report":
+        st.header("Download Report")
+        patient_id = st.text_input("Patient ID")
+        if st.button("Generate Report"):
+            if patient_id not in patients_db:
+                st.error("Patient not found")
+            else:
+                analysis = analyses_db.get(patient_id)
+                pdf_buffer = generate_report_pdf(patient_id, analysis)
+                st.download_button(
+                    label="Download PDF Report",
+                    data=pdf_buffer,
+                    file_name=f"report_{patient_id}.pdf",
+                    mime="application/pdf"
+                )
