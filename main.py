@@ -8,6 +8,37 @@ from reportlab.pdfgen import canvas
 from passlib.context import CryptContext
 from dataclasses import dataclass, asdict, field
 from typing import Optional, List
+
+# --- Dataclasses สำหรับเก็บข้อมูล ---
+@dataclass
+class Patient:
+    patient_id: str
+    scan_date: datetime
+    eye: str
+
+@dataclass
+class AnalysisResult:
+    patient_id: str
+    diagnosis: str
+    confidence: float
+    details: Optional[str] = None
+
+@dataclass
+class Notification:
+    id: str
+    message: str
+    timestamp: datetime
+
+# --- ฐานข้อมูลจำลองในหน่วยความจำ ---
+patients_db = {}
+analyses_db = {}
+notifications_db = {}
+
+# --- โฟลเดอร์สำหรับเก็บไฟล์อัพโหลด ---
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+# --- ฟังก์ชันสร้าง PDF Report ---
 def generate_report_pdf(patient_id: str, analysis: Optional[AnalysisResult]) -> BytesIO:
     buffer = BytesIO()
     p = canvas.Canvas(buffer)
@@ -24,7 +55,26 @@ def generate_report_pdf(patient_id: str, analysis: Optional[AnalysisResult]) -> 
     buffer.seek(0)
     return buffer
 
-# Streamlit app
+# --- ฟังก์ชัน Authenticate User (ตัวอย่างง่ายๆ) ---
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# ตัวอย่าง user database (username:hashed_password)
+user_db = {
+    "admin": pwd_context.hash("password123")
+}
+
+@dataclass
+class User:
+    username: str
+
+def authenticate_user(username: str, password: str) -> Optional[User]:
+    hashed = user_db.get(username)
+    if hashed and pwd_context.verify(password, hashed):
+        return User(username=username)
+    return None
+
+# --- Streamlit App ---
+
 st.title("RetinaView AI")
 
 if "user" not in st.session_state:
