@@ -1,0 +1,89 @@
+body { 
+    font-family: 'Inter', sans-serif; 
+}
+
+.upload-area {
+    border: 2px dashed #d1d5db;
+    transition: all 0.3s ease;
+}
+
+.upload-area:hover {
+    border-color: #3EB489;
+    background-color: #f0fdf4;
+}
+
+.upload-area.dragover {
+    border-color: #3EB489;
+    background-color: #dcfce7;
+}
+
+.thumbnail {
+    transition: all 0.2s ease;
+}
+
+.thumbnail:hover {
+    transform: scale(1.05);
+}
+
+.loading-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.carousel-container {
+    scroll-behavior: smooth;
+}
+
+.abnormal-highlight {
+    box-shadow: 0 0 0 3px #D94A38;
+    border-radius: 8px;
+}
+
+.notification {
+    animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+.notification.fade-out {
+    animation: slideOutRight 0.3s ease-in;
+}
+
+@keyframes slideOutRight {
+    from { transform: translateX(0); opacity: 1; }
+    to { transform: translateX(100%); opacity: 0; }
+}
+
+.tab-active {
+    border-bottom: 2px solid #3EB489;
+    color: #3EB489;
+}
+
+.login-container {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.pulse-dot {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
